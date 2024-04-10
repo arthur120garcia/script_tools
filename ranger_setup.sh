@@ -18,7 +18,7 @@ function help_message(){
     # Help message defaults
     cat <<EOF
 
-!!WARNING!! ONLY TESTED IN ORACLE 8.8 !!WARNING!!
+!!WARNING!! ONLY TESTED IN ORACLE 8 !!WARNING!!
 
 This scrit is only used to setup Ranger.
 OPTIONS:
@@ -92,7 +92,7 @@ function install_package(){
 
     # LOOP THROUGH PACKAGES NAME
     for PACKAGE in $(echo ${PACKAGES_NAME});do
-        yum list installed "*${PACKAGE}*" &>/dev/null
+        yum list installed "${PACKAGE}*" &>/dev/null
         if [ $? -eq 0 ];then
             logger "${FUNCNAME[0]}" "INFO" "${PACKAGE} already installed"
             continue;
@@ -218,7 +218,7 @@ function build_ranger(){
     REPOSITORY="https://gitbox.apache.org/repos/asf/ranger.git"
 
     # If has path ranger empty delete
-    if ! ls -l $RANGER_BUILD_PATH | grep -q pom.xml;then
+    if ! ls -l $RANGER_BUILD_PATH 2>/dev/null | grep -q pom.xml;then
         logger "${FUNCNAME[0]}" "WARNING" "Found ranger folder without build file"
         logger "${FUNCNAME[0]}" "WARNING" "Removing ${RANGER_BUILD_PATH} folder"
         rm -rf "${RANGER_BUILD_PATH}"
@@ -234,7 +234,6 @@ function build_ranger(){
     fi
     cd $RANGER_BUILD_PATH
     logger "${FUNCNAME[0]}" "INFO" "Running maven command to compile Ranger"
-    export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.382.b05-2.0.1.el8.x86_64/jre/
     mvn -Pall clean 
     mvn -Pall -DskipTests=false clean compile package
     CHK_COD=$?
@@ -331,7 +330,7 @@ function setup_solr(){
     logger "${FUNCNAME[0]}" "INFO" "Configuring solr installation"
 
     # Change setup properties
-    SOLR_BIN_URL="https://dlcdn.apache.org/lucene/solr/${SOLR_VERSION}/solr-${SOLR_VERSION}.tgz"
+    SOLR_BIN_URL="${SOLR_URL}/solr-${SOLR_VERSION}.tgz"
 
     SOLR_LOG_FOLDER=/var/log/hadoop/solr/ranger_audits
 
@@ -364,6 +363,7 @@ function setup_solr(){
     # Sarting solr
     SOLR_SCRIPT_START="${SOLR_FOLDER}/ranger_audit_server/scripts/start_solr.sh"
     SOLR_SCRIPT_STOP="${SOLR_FOLDER}/ranger_audit_server/scripts/stop_solr.sh"
+    SOLR_SCRIPT_INIT="${SOLR_FOLDER}/ranger_audit_server/scripts/solr.in.sh"
     logger "${FUNCNAME[0]}" "INFO" "Creating alias to start and stop solr"
 
     if ! grep -q "$SOLR_SCRIPT_START" ~/.bashrc ;then
@@ -786,15 +786,16 @@ logger "${FUNCNAME[0]}" "INFO" "Setup procces = $SETUP"
 
 # Settings java home
 PROFILE_JAVAHOME="/etc/profile.d/java_home.sh"
-PATH_JAVAHOME="/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.382.b05-2.0.1.el8.x86_64/jre"
-logger "${FUNCNAME[0]}" "INFO" "Setting java home: JAVA_HOME=${PATH_JAVAHOME}"
-echo "export JAVA_HOME=${PATH_JAVAHOME}" > "$PROFILE_JAVAHOME"
+PATH_JAVAHOME_11=$(alternatives --display java | grep 'slave jre:' | grep 'java-11' | awk '{print $NF}')
+PATH_JAVAHOME_1_8=$(alternatives --display java | grep 'slave jre:' | grep 'java-1.8' | awk '{print $NF}')
+logger "${FUNCNAME[0]}" "INFO" "Setting java home: JAVA_HOME=${PATH_JAVAHOME_1_8}"
+echo "export JAVA_HOME=${PATH_JAVAHOME_1_8}" > "$PROFILE_JAVAHOME"
 chmod +x "$PROFILE_JAVAHOME"
 source "$PROFILE_JAVAHOME"
 logger "${FUNCNAME[0]}" "INFO" "JAVA_HOME configured in $PROFILE_JAVAHOME"
 
 # Installing requirements
-if ! install_package "netcat wget git gcc gcc-c++ bzip2 java-1.8.0-openjdk-devel java-1.8.0-openjdk python3 mysql-connector-java";then
+if ! install_package "netcat wget git gcc gcc-c++ bzip2 java-1.8.0-openjdk java-1.8.0-openjdk-devel python3 mysql-connector-java";then
     logger "${FUNCNAME[0]}" "ERROR" "Error to install some package. Please install it manually and run script again."
     exit 1
 fi
@@ -826,8 +827,9 @@ if $P_BUILD;then
 fi
 
 # FOLDERS GLOBAL VARIABLE
-# SOLR_VERSION=$(curl https://dlcdn.apache.org/solr/solr/ 2>/dev/null | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
-SOLR_VERSION="8.11.2"
+SOLR_VERSION=$(curl https://dlcdn.apache.org/lucene/solr/ 2>/dev/null | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
+SOLR_URL="https://dlcdn.apache.org/lucene/solr/${SOLR_VERSION}"
+if [ -z $RANGER_BUILDED_PATH ];then RANGER_BUILDED_PATH="./ranger";fi
 RANGER_VERSION=$(cat "${RANGER_BUILDED_PATH}/target/version")
 
 # folders schema
@@ -1050,11 +1052,13 @@ MYSQLSCRIPT
     logger "${FUNCNAME[0]}" "INFO" "Installing solr"
     if ! setup_solr "${RANGER_BUILDED_PATH}";then
         logger "${FUNCNAME[0]}" "ERROR" "Error to install solr."
-        rm -rf "${HADOOP_FOLDER}/solr"
+        #rm -rf "${HADOOP_FOLDER}/solr"
         kill -9 $(ps faux | grep -v grep | grep Dsolr| awk '{print $2}') &>/dev/null
         clean_user_db
         exit 1
     fi
+
+    source "$PROFILE_JAVAHOME"
 
     # install Ranger admin
     logger "${FUNCNAME[0]}" "INFO" "Installing Ranger Admin"
